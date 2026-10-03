@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['userId', 'email', 'planTier', 'runsUsedToday', 'totalWordsHumanized']) &&
+        data.keys().hasOnly(['userId', 'email', 'displayName', 'planTier', 'runsUsedToday', 'totalWordsHumanized', 'customBannedWords', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId.size() <= 128 && data.userId == request.auth.uid &&
+        data.email is string && data.email.size() <= 256 &&
+        data.planTier in ['free', 'pro', 'team'] &&
+        data.runsUsedToday is number && data.runsUsedToday >= 0 &&
+        data.totalWordsHumanized is number && data.totalWordsHumanized >= 0 &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+        (!('customBannedWords' in data) || (data.customBannedWords is list && data.customBannedWords.size() <= 100)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidHumanization(data) {
+      return data.keys().hasAll(['id', 'userId', 'originalText', 'humanizedText', 'tone', 'originalScore', 'humanizedScore']) &&
+        data.keys().hasOnly(['id', 'userId', 'originalText', 'humanizedText', 'tone', 'originalScore', 'humanizedScore', 'typoRate', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.userId is string && data.userId.size() <= 128 && data.userId == request.auth.uid &&
+        data.originalText is string && data.originalText.size() <= 50000 &&
+        data.humanizedText is string && data.humanizedText.size() <= 50000 &&
+        data.tone is string && data.tone.size() <= 64 &&
+        data.originalScore is number && data.originalScore >= 0 && data.originalScore <= 100 &&
+        data.humanizedScore is number && data.humanizedScore >= 0 && data.humanizedScore <= 100 &&
+        (!('typoRate' in data) || (data.typoRate is number && data.typoRate >= 0 && data.typoRate <= 100)) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64));
+    }
+
+    // User Profile Document
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().email == existing().email;
+      allow delete: if false;
+
+      // Humanizations Subcollection
+      match /humanizations/{humanizationId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(humanizationId) && isValidHumanization(incoming());
+        allow update: if isOwner(userId) && isValidId(humanizationId) && isValidHumanization(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId;
+        allow delete: if isOwner(userId) && isValidId(humanizationId);
+      }
+    }
+  }
+}

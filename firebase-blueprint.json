@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Stores user profile, subscription status, usage credits, and preferences",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the user",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "The user email address",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The user display name",
+          "maxLength": 128
+        },
+        "planTier": {
+          "type": "string",
+          "description": "Active subscription tier: free, pro, or team",
+          "enum": ["free", "pro", "team"]
+        },
+        "runsUsedToday": {
+          "type": "number",
+          "description": "Number of humanization runs consumed today"
+        },
+        "totalWordsHumanized": {
+          "type": "number",
+          "description": "Lifetime total words processed"
+        },
+        "customBannedWords": {
+          "type": "array",
+          "description": "Custom anti-AI words scrubbed from outputs"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of account creation",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        }
+      },
+      "required": ["userId", "email", "planTier", "runsUsedToday", "totalWordsHumanized"]
+    },
+    "Humanization": {
+      "title": "Humanization",
+      "description": "Stores saved humanized texts, detector scores, and applied nuances",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique record identifier",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the document creator",
+          "maxLength": 128
+        },
+        "originalText": {
+          "type": "string",
+          "description": "Original robotic AI text input",
+          "maxLength": 50000
+        },
+        "humanizedText": {
+          "type": "string",
+          "description": "Humanized and nuanced output text",
+          "maxLength": 50000
+        },
+        "tone": {
+          "type": "string",
+          "description": "Human persona used (bro, college, coffee, reddit, quick_dm, work)",
+          "maxLength": 64
+        },
+        "originalScore": {
+          "type": "number",
+          "description": "Initial AI risk score (0-100)"
+        },
+        "humanizedScore": {
+          "type": "number",
+          "description": "Post-humanize AI risk score (0-100)"
+        },
+        "typoRate": {
+          "type": "number",
+          "description": "Casual typo injection percentage"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of generation",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "originalText", "humanizedText", "tone", "originalScore", "humanizedScore"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with plan quota and settings"
+    },
+    "/users/{userId}/humanizations/{humanizationId}": {
+      "schema": "Humanization",
+      "description": "Subcollection of humanized generations created by the user"
+    }
+  }
+}

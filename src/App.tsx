@@ -25,6 +25,14 @@ import { SentenceLengthChart } from './components/SentenceLengthChart';
 import { XRayView } from './components/XRayView';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { JevAuditCard } from './components/JevAuditCard';
+import { SubscriptionModal } from './components/SubscriptionModal';
+import { PaywallPrompt } from './components/PaywallPrompt';
+import { FileUploader } from './components/FileUploader';
+import { CustomBannedWordsModal } from './components/CustomBannedWordsModal';
+import { AudioTranscriber } from './components/AudioTranscriber';
+import { LiveVoiceModal } from './components/LiveVoiceModal';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { PLAN_LIMITS, getStoredSubscription, saveSubscription } from './utils/subscription';
 import { clientAnalyzeText, quickApplyTypos } from './utils/textAnalysis';
 import {
   HumanizeOptions,
@@ -33,9 +41,13 @@ import {
   HistoryItem,
   AnalysisResult,
   ToneType,
+  UserSubscription,
+  PlanTier,
 } from './types';
 
-export default function App() {
+function GhostWriterMain() {
+  const { currentUser, saveHumanizationToCloud, cloudHistory } = useAuth();
+
   // Input state
   const [inputText, setInputText] = useState<string>(
     `In the contemporary digital era, the ubiquitous prevalence of social media platforms has revolutionized human communication. Furthermore, it is crucial to recognize that while these networks facilitate global connectivity, they simultaneously foster feelings of isolation and psychological distress among adolescents. Moreover, the intricate tapestry of modern social networking underscores the multifaceted nature of interpersonal relationships in today's interconnected society. In conclusion, it is pivotal for policymakers and educators to delve deeply into this phenomenon to ensure holistic well-being.`
@@ -54,6 +66,31 @@ export default function App() {
     typoRate: 6,
     allowCasualLower: true,
   });
+
+  // Subscription state
+  const [subscription, setSubscription] = useState<UserSubscription>(() => getStoredSubscription());
+  const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isPaywallOpen, setIsPaywallOpen] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<
+    'word_limit' | 'credits_exceeded' | 'locked_persona' | 'feature_locked'
+  >('word_limit');
+  const [isCustomWordsOpen, setIsCustomWordsOpen] = useState(false);
+  const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
+  const [customBannedWords, setCustomBannedWords] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('ghostwriter_banned_words');
+      return raw ? JSON.parse(raw) : ['synergistic', 'holistic', 'paradigm shift'];
+    } catch {
+      return ['synergistic', 'holistic'];
+    }
+  });
+
+  const saveCustomWords = (words: string[]) => {
+    setCustomBannedWords(words);
+    try {
+      localStorage.setItem('ghostwriter_banned_words', JSON.stringify(words));
+    } catch {}
+  };
 
   // UI state
   const [loading, setLoading] = useState<boolean>(false);
@@ -99,6 +136,17 @@ export default function App() {
     }
   }, [history]);
 
+  // Sync cloud history from Firestore when authenticated
+  useEffect(() => {
+    if (cloudHistory && cloudHistory.length > 0) {
+      setHistory((prev) => {
+        const existingIds = new Set(prev.map((i) => i.id));
+        const newItems = cloudHistory.filter((i) => !existingIds.has(i.id));
+        return [...newItems, ...prev];
+      });
+    }
+  }, [cloudHistory]);
+
   // Real-time client-side analysis of input text
   const inputAnalysis = useMemo(() => {
     return clientAnalyzeText(inputText);
@@ -122,6 +170,29 @@ export default function App() {
       return;
     }
 
+    const limits = PLAN_LIMITS[subscription.tier];
+
+    // Check 1: Free tier daily credits limit
+    if (!limits.unlimitedRuns && subscription.runsUsedToday >= limits.dailyRuns) {
+      setPaywallReason('credits_exceeded');
+      setIsPaywallOpen(true);
+      return;
+    }
+
+    // Check 2: Word limits per tier
+    if (inputAnalysis.wordCount > limits.maxWordsPerRun) {
+      setPaywallReason('word_limit');
+      setIsPaywallOpen(true);
+      return;
+    }
+
+    // Check 3: Persona locked
+    if (!limits.unlockedTones.includes(options.tone)) {
+      setPaywallReason('locked_persona');
+      setIsPaywallOpen(true);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -137,6 +208,7 @@ export default function App() {
           includeTypos: options.includeTypos,
           typoRate: options.typoRate,
           allowCasualLower: options.allowCasualLower,
+          customBannedWords: subscription.tier !== 'free' ? customBannedWords : [],
         }),
       });
 
@@ -148,6 +220,15 @@ export default function App() {
 
       setHumanizedText(data.humanizedText);
       setLastResponse(data);
+
+      // Record subscription usage
+      const updatedSub: UserSubscription = {
+        ...subscription,
+        runsUsedToday: subscription.runsUsedToday + 1,
+        totalWordsHumanized: (subscription.totalWordsHumanized || 0) + inputAnalysis.wordCount,
+      };
+      setSubscription(updatedSub);
+      saveSubscription(updatedSub);
 
       // Add to history
       const newHistoryItem: HistoryItem = {
@@ -162,6 +243,9 @@ export default function App() {
       };
 
       setHistory((prev) => [newHistoryItem, ...prev.slice(0, 19)]);
+      if (currentUser) {
+        saveHumanizationToCloud(newHistoryItem);
+      }
       triggerToast('✨ Humanized with natural tangents & nuances!');
     } catch (err: any) {
       console.error(err);
@@ -227,10 +311,43 @@ export default function App() {
       <Header
         onOpenHistory={() => setIsHistoryOpen(true)}
         historyCount={history.length}
+        subscription={subscription}
+        onOpenSubscription={() => setIsSubscriptionModalOpen(true)}
+        onOpenLiveVoice={() => setIsLiveVoiceOpen(true)}
       />
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* SaaS Free Tier Alert / Upgrade Banner */}
+        {subscription.tier === 'free' && (
+          <div className="bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-rose-500/10 border border-amber-500/30 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg shadow-black/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-md shadow-amber-500/20 shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-zinc-100 flex items-center gap-2">
+                  <span>Free Starter Plan Active</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold">
+                    {Math.max(0, PLAN_LIMITS.free.dailyRuns - subscription.runsUsedToday)} / {PLAN_LIMITS.free.dailyRuns} runs remaining today
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Upgrade to GhostWriter Pro to unlock full 2,500-word essays, all 6 voice personas & unlimited runs.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setIsSubscriptionModalOpen(true)}
+              className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-white font-bold text-xs shadow-md shadow-amber-500/20 transition active:scale-95 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <span>Unlock Pro ($19/mo)</span>
+              <Sparkles className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Preset robotic text launcher bar */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -263,6 +380,11 @@ export default function App() {
         <ToneSelector
           selectedTone={options.tone}
           onChange={(tone) => setOptions((prev) => ({ ...prev, tone }))}
+          unlockedTones={PLAN_LIMITS[subscription.tier].unlockedTones}
+          onLockedToneClick={() => {
+            setPaywallReason('locked_persona');
+            setIsPaywallOpen(true);
+          }}
         />
 
         {/* Imperfection & Humanizer Levers */}
@@ -297,6 +419,25 @@ export default function App() {
                 </h2>
               </div>
               <div className="flex items-center gap-2">
+                <AudioTranscriber
+                  onTranscriptionComplete={(transcribed) => {
+                    setInputText((prev) => (prev.trim() ? prev + ' ' + transcribed : transcribed));
+                    triggerToast('🎙️ Transcribed speech with gemini-3.5-transcribe!');
+                  }}
+                  onError={(err) => setError(err)}
+                />
+                <FileUploader
+                  tier={subscription.tier}
+                  onFileLoaded={(content, filename) => {
+                    setInputText(content);
+                    triggerToast(`Loaded "${filename}"`);
+                  }}
+                  onLockedClick={() => {
+                    setPaywallReason('feature_locked');
+                    setIsPaywallOpen(true);
+                  }}
+                />
+                <span className="text-zinc-700">|</span>
                 <button
                   onClick={() => setInputText('')}
                   className="text-[11px] text-zinc-500 hover:text-zinc-300 transition"
@@ -329,10 +470,23 @@ export default function App() {
                 className="w-full flex-1 bg-transparent resize-none focus:outline-hidden text-sm text-zinc-200 placeholder:text-zinc-600 leading-relaxed font-sans"
               />
 
-              {/* Bottom stats of input */}
+              {/* Bottom stats of input with plan limit indicator */}
               <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
                 <div className="flex items-center gap-3">
-                  <span>{inputAnalysis.wordCount} words</span>
+                  <span
+                    className={
+                      subscription.tier === 'free' &&
+                      inputAnalysis.wordCount > PLAN_LIMITS.free.maxWordsPerRun
+                        ? 'text-rose-400 font-bold'
+                        : ''
+                    }
+                  >
+                    {inputAnalysis.wordCount} / {PLAN_LIMITS[subscription.tier].maxWordsPerRun} words
+                    {subscription.tier === 'free' &&
+                      inputAnalysis.wordCount > PLAN_LIMITS.free.maxWordsPerRun && (
+                        <span className="text-rose-400 font-bold ml-1.5">(Free Limit Exceeded)</span>
+                      )}
+                  </span>
                   <span>{inputAnalysis.sentenceCount} sentences</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -641,6 +795,21 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* Custom Banned Words Scrubber Trigger */}
+            <button
+              onClick={() => setIsCustomWordsOpen(true)}
+              className="px-3.5 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition text-xs font-medium flex items-center gap-1.5 cursor-pointer shrink-0"
+              title="Configure custom trigger words to scrub"
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span className="hidden sm:inline">Anti-AI Scrubber</span>
+              {subscription.tier === 'free' && (
+                <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20">
+                  PRO
+                </span>
+              )}
+            </button>
+
             <button
               onClick={handleHumanize}
               disabled={loading || !inputText.trim()}
@@ -654,7 +823,11 @@ export default function App() {
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  <span>Humanize & Mess It Up</span>
+                  <span>
+                    {subscription.tier === 'free'
+                      ? `Humanize (${Math.max(0, PLAN_LIMITS.free.dailyRuns - subscription.runsUsedToday)} left today)`
+                      : 'Humanize & Mess It Up'}
+                  </span>
                   <kbd className="hidden md:inline-flex items-center gap-0.5 text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/30 border border-white/20 text-white/90">
                     ⌘↵
                   </kbd>
@@ -664,6 +837,40 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* Subscription SaaS Pricing & Billing Modal */}
+      <SubscriptionModal
+        isOpen={isSubscriptionModalOpen}
+        onClose={() => setIsSubscriptionModalOpen(false)}
+        subscription={subscription}
+        onUpdateSubscription={(newSub) => setSubscription(newSub)}
+      />
+
+      {/* Paywall Limit Alert Prompt */}
+      <PaywallPrompt
+        isOpen={isPaywallOpen}
+        onClose={() => setIsPaywallOpen(false)}
+        onOpenSubscription={() => {
+          setIsPaywallOpen(false);
+          setIsSubscriptionModalOpen(true);
+        }}
+        reason={paywallReason}
+        wordCount={inputAnalysis.wordCount}
+        maxWords={PLAN_LIMITS[subscription.tier].maxWordsPerRun}
+      />
+
+      {/* Custom Banned Words Scrubber Modal */}
+      <CustomBannedWordsModal
+        isOpen={isCustomWordsOpen}
+        onClose={() => setIsCustomWordsOpen(false)}
+        tier={subscription.tier}
+        onOpenSubscription={() => {
+          setIsCustomWordsOpen(false);
+          setIsSubscriptionModalOpen(true);
+        }}
+        customWords={customBannedWords}
+        onSaveWords={saveCustomWords}
+      />
 
       {/* History Drawer */}
       <HistoryDrawer
@@ -681,6 +888,24 @@ export default function App() {
           triggerToast('History cleared');
         }}
       />
+      {/* Live Voice Conversation Modal (gemini-3.8-live) */}
+      <LiveVoiceModal
+        isOpen={isLiveVoiceOpen}
+        onClose={() => setIsLiveVoiceOpen(false)}
+        onInsertText={(spoken) => {
+          setInputText((prev) => (prev.trim() ? prev + '\n\n' + spoken : spoken));
+          triggerToast('Inserted Live Voice suggestion');
+        }}
+        currentInputText={inputText}
+      />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <GhostWriterMain />
+    </AuthProvider>
   );
 }

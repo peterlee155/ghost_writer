@@ -1,10 +1,12 @@
 import React from 'react';
 import { ToneType } from '../types';
-import { MessageSquare, Coffee, GraduationCap, Flame, MessageCircle, Briefcase } from 'lucide-react';
+import { MessageSquare, Coffee, GraduationCap, Flame, MessageCircle, Briefcase, Lock } from 'lucide-react';
 
 interface ToneSelectorProps {
   selectedTone: ToneType;
   onChange: (tone: ToneType) => void;
+  unlockedTones?: ToneType[];
+  onLockedToneClick?: (tone: ToneType) => void;
 }
 
 interface ToneConfig {
@@ -60,7 +62,12 @@ const TONES: ToneConfig[] = [
   },
 ];
 
-export const ToneSelector: React.FC<ToneSelectorProps> = ({ selectedTone, onChange }) => {
+export const ToneSelector: React.FC<ToneSelectorProps> = ({
+  selectedTone,
+  onChange,
+  unlockedTones,
+  onLockedToneClick,
+}) => {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -73,28 +80,45 @@ export const ToneSelector: React.FC<ToneSelectorProps> = ({ selectedTone, onChan
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {TONES.map(tone => {
           const isSelected = selectedTone === tone.id;
+          const isLocked = unlockedTones ? !unlockedTones.includes(tone.id) : false;
+
           return (
             <button
               key={tone.id}
-              onClick={() => onChange(tone.id)}
+              onClick={() => {
+                if (isLocked && onLockedToneClick) {
+                  onLockedToneClick(tone.id);
+                } else {
+                  onChange(tone.id);
+                }
+              }}
               className={`text-left p-2.5 rounded-xl border transition-all relative flex flex-col justify-between ${
                 isSelected
                   ? 'bg-amber-500/10 border-amber-500/40 text-amber-200 shadow-md shadow-amber-500/5 ring-1 ring-amber-500/30'
+                  : isLocked
+                  ? 'bg-zinc-900/40 border-zinc-800/60 text-zinc-400 hover:border-zinc-700'
                   : 'bg-zinc-900/70 border-zinc-800 text-zinc-300 hover:bg-zinc-800/80 hover:border-zinc-700'
               }`}
             >
               <div>
                 <div className="flex items-center justify-between gap-1 mb-1.5">
                   <div className="p-1 rounded-lg bg-zinc-800/80">{tone.icon}</div>
-                  <span
-                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${
-                      isSelected
-                        ? 'bg-amber-500/20 text-amber-300 font-medium'
-                        : 'bg-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    {tone.badge}
-                  </span>
+                  {isLocked ? (
+                    <span className="flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      <Lock className="w-2.5 h-2.5" />
+                      <span>PRO</span>
+                    </span>
+                  ) : (
+                    <span
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${
+                        isSelected
+                          ? 'bg-amber-500/20 text-amber-300 font-medium'
+                          : 'bg-zinc-800 text-zinc-400'
+                      }`}
+                    >
+                      {tone.badge}
+                    </span>
+                  )}
                 </div>
                 <div className="font-semibold text-xs leading-snug text-zinc-100">{tone.title}</div>
               </div>

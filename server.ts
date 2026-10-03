@@ -1,8 +1,10 @@
 import express from 'express';
+import http from 'http';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, Modality, LiveServerMessage } from '@google/genai';
+import { WebSocketServer } from 'ws';
 import { TypeSafeClient, choice, score, noul } from '@typesafe-ai/sdk';
 
 dotenv.config();
@@ -558,6 +560,44 @@ app.post('/api/jev/evaluate', async (req, res) => {
   }
 });
 
+// Audio transcription endpoint using gemini-3.5-transcribe
+app.post('/api/transcribe-audio', async (req, res) => {
+  try {
+    const { audioBase64, mimeType = 'audio/webm' } = req.body;
+    if (!audioBase64) {
+      return res.status(400).json({ error: 'audioBase64 is required' });
+    }
+    if (!aiClient) {
+      return res.status(500).json({ error: 'Gemini client not initialized' });
+    }
+
+    const audioPart = {
+      inlineData: {
+        mimeType: mimeType || 'audio/webm',
+        data: audioBase64,
+      },
+    };
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-3.5-transcribe',
+      contents: {
+        parts: [
+          audioPart,
+          {
+            text: 'Transcribe this spoken audio accurately. Output only the transcribed spoken words verbatim with natural punctuation. Do not add conversational commentary or preamble.',
+          },
+        ],
+      },
+    });
+
+    const transcription = response.text ? response.text.trim() : '';
+    res.json({ success: true, transcription });
+  } catch (err: any) {
+    console.error('Audio transcription error:', err);
+    res.status(500).json({ error: err.message || 'Failed to transcribe audio' });
+  }
+});
+
 app.post('/api/analyze', async (req, res) => {
   try {
     const { text } = req.body;
@@ -579,6 +619,7 @@ app.post('/api/humanize', async (req, res) => {
       includeTypos = true,
       typoRate = 6, // 0 to 15%
       allowCasualLower = true,
+      customBannedWords = [],
     } = req.body;
 
     if (!text || text.trim().length === 0) {
@@ -672,6 +713,11 @@ You are an expert human ghostwriter whose sole mission is to take AI-generated t
 PRIMARY OBJECTIVES:
 1. DESTROY ALL AI PATTERNS:
    - Ban these words and their derivatives: "delve", "testament", "tapestry", "crucial", "pivotal", "beacon", "foster", "realm", "moreover", "furthermore", "in conclusion", "it is important to remember", "holistic", "interconnected", "navigating the landscape".
+   ${
+     Array.isArray(customBannedWords) && customBannedWords.length > 0
+       ? `- USER BANNED WORDS (NEVER USE ANY OF THESE): ${customBannedWords.map((w: string) => `"${w}"`).join(', ')}`
+       : ''
+   }
    - Demolish symmetric sentence structures and robotic summaries.
    - Do NOT wrap up with a neat, moralizing "in conclusion" or "ultimately" takeaway. Real humans just stop talking when they've made their point.
 
@@ -819,8 +865,72 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`GhostWriter server running on port ${PORT}`);
+  const httpServer = http.createServer(app);
+  const wss = new WebSocketServer({ server: httpServer, path: '/api/live' });
+
+  wss.on('connection', async (clientWs) => {
+    if (!aiClient) {
+      clientWs.send(JSON.stringify({ error: 'Gemini client not initialized' }));
+      clientWs.close();
+      return;
+    }
+
+    try {
+      const session = await aiClient.live.connect({
+        model: 'gemini-3.8-live',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+          },
+          systemInstruction:
+            'You are GhostWriter Live Voice Editor. Speak naturally, authentically, and casually. Help the user brainstorm ideas, refine their writing, or explain how to humanize robotic phrasing in real time.',
+        },
+        callbacks: {
+          onmessage: (message: LiveServerMessage) => {
+            const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            const textPart = message.serverContent?.modelTurn?.parts?.find((p) => (p as any).text);
+            const text = textPart ? (textPart as any).text : undefined;
+            if (audio || text) {
+              clientWs.send(JSON.stringify({ audio, text }));
+            }
+            if (message.serverContent?.interrupted) {
+              clientWs.send(JSON.stringify({ interrupted: true }));
+            }
+          },
+        },
+      });
+
+      clientWs.on('message', (data) => {
+        try {
+          const parsed = JSON.parse(data.toString());
+          if (parsed.audio) {
+            session.sendRealtimeInput({
+              audio: { data: parsed.audio, mimeType: 'audio/pcm;rate=16000' },
+            });
+          } else if (parsed.text) {
+            session.sendRealtimeInput({
+              text: parsed.text,
+            });
+          }
+        } catch (e: any) {
+          console.warn('Live WebSocket message parse note:', e.message);
+        }
+      });
+
+      clientWs.on('close', () => {
+        try {
+          session.close();
+        } catch {}
+      });
+    } catch (err: any) {
+      console.error('Gemini Live session error:', err);
+      clientWs.send(JSON.stringify({ error: err.message || 'Live connection failed' }));
+    }
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`GhostWriter server with Live API running on port ${PORT}`);
   });
 }
 

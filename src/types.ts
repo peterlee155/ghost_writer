@@ -85,3 +85,24 @@ export interface HistoryItem {
   originalScore: number;
   humanizedScore: number;
 }
+
+export type PlanTier = 'free' | 'pro' | 'team';
+
+export interface PlanLimits {
+  maxWordsPerRun: number;
+  dailyRuns: number;
+  unlockedTones: ToneType[];
+  canUploadFiles: boolean;
+  canUseCustomBannedWords: boolean;
+  priorityProcessing: boolean;
+  unlimitedRuns: boolean;
+}
+
+export interface UserSubscription {
+  tier: PlanTier;
+  billingInterval: 'monthly' | 'annual';
+  runsUsedToday: number;
+  totalWordsHumanized: number;
+  renewalDate: string;
+  status: 'active' | 'trial' | 'canceled';
+}
