@@ -1,0 +1,6 @@
+{
+  "name": "GhostWriter - Natural Humanizer",
+  "description": "Transform AI-generated text into undetectable, organically human writing with natural nuances, conversational rhythm, varied sentence bursts, subtle tangents, and authentic imperfections.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
